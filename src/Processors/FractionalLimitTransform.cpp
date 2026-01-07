@@ -125,6 +125,13 @@ IProcessor::Status FractionalLimitTransform::prepare(const PortNumbers & updated
         offset += static_cast<UInt64>(std::ceil(rows_cnt * offset_fraction));
         if (with_ties && rows_read_from_cache < limit + offset)
             previous_row_chunk = {};
+        /// Now that we deduced limit and offset we can evict out of range chunks from cache.
+        UInt64 cached_rows_cnt = rows_cnt - rows_read_from_cache;
+        while (!chunks_cache.empty() && !with_ties && cached_rows_cnt - chunks_cache.back().chunk.getNumRows() >= offset + limit)
+        {
+            cached_rows_cnt -= chunks_cache.back().chunk.getNumRows();
+            chunks_cache.pop_back();
+        }
     }
 
     /// If we reached here all input ports are finished.
