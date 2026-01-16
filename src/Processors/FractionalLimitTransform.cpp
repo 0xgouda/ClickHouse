@@ -125,6 +125,7 @@ IProcessor::Status FractionalLimitTransform::prepare(const PortNumbers & updated
         offset += static_cast<UInt64>(std::ceil(rows_cnt * offset_fraction));
         if (with_ties && rows_read_from_cache < limit + offset)
             previous_row_chunk = {};
+
         /// Now that we deduced limit and offset we can evict out of range chunks from cache.
         UInt64 cached_rows_cnt = rows_cnt - rows_read_from_cache;
         while (!chunks_cache.empty() && !with_ties && cached_rows_cnt - chunks_cache.back().chunk.getNumRows() >= offset + limit)
@@ -132,6 +133,33 @@ IProcessor::Status FractionalLimitTransform::prepare(const PortNumbers & updated
             cached_rows_cnt -= chunks_cache.back().chunk.getNumRows();
             chunks_cache.pop_back();
         }
+        /// Same but for WITH TIES.
+        /// We need first to find the chunk containing the last row within limit.
+        /// Then we can evict all chunks after it that are definitely out of range.
+        UInt64 counter = 0;
+        bool found = false;
+        bool reset_prc = false;
+        for (UInt64 i = 0; !previous_row_chunk && with_ties && i < chunks_cache.size(); ++i)
+        {
+            counter += chunks_cache[i].chunk.getNumRows();
+            /// Check if this is the chunk containing the last row within limit.
+            if (counter >= offset + limit && counter - chunks_cache[i].chunk.getNumRows() < offset + limit)
+            {
+                previous_row_chunk = makeChunkWithPreviousRow(chunks_cache[i].chunk, offset + limit - counter - 1);
+                reset_prc = true;
+                found = true;
+                break;
+            }
+        }
+        while (found && with_ties && !chunks_cache.empty()
+            && cached_rows_cnt - chunks_cache.back().chunk.getNumRows() >= offset + limit
+            && !sortColumnsEqualAt(extractSortColumns(chunks_cache.back().chunk.getColumns()), 0))
+        {
+            cached_rows_cnt -= chunks_cache.back().chunk.getNumRows();
+            chunks_cache.pop_back();
+        }
+        if (reset_prc)
+            previous_row_chunk = {};
     }
 
     /// If we reached here all input ports are finished.
