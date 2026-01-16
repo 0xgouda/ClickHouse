@@ -1,0 +1,3 @@
+<test>
+    <query>SELECT * FROM numbers(1e10) OFFSET 0.9999999999</query>
+</test>
