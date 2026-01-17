@@ -1,0 +1,8 @@
+clickhouse-client < 03704_fractional_limit_with_ties.sql > 03704_fractional_limit_with_ties.reference
+clickhouse-client < 03752_fractional_limit_offset_small_blocks.sql > 03752_fractional_limit_offset_small_blocks.reference
+clickhouse-client < 03753_fractional_limit_with_ties_small_blocks.sql > 03753_fractional_limit_with_ties_small_blocks.reference
+clickhouse-client < 03754_fractional_limit_offset_multiple_streams.sql > 03754_fractional_limit_offset_multiple_streams.reference 
+clickhouse-client < 03570_limit_by_all.sql > 03570_limit_by_all.reference
+clickhouse-client < 03571_limit_by_all_old_planner.sql > 03571_limit_by_all_old_planner.reference
+clickhouse-client < 03653_fractional_limit_offset.sql > 03653_fractional_limit_offset.reference
+clickhouse-client < 03681_distributed_fractional_limit_offset.sql > 03681_distributed_fractional_limit_offset.reference
