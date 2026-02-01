@@ -6,6 +6,7 @@
 #include <Processors/Chunk.h>
 #include <Processors/IProcessor.h>
 #include <Processors/RowsBeforeStepCounter.h>
+#include <base/types.h>
 
 namespace DB
 {
@@ -22,6 +23,13 @@ class NegativeLimitTransform final : public IProcessor
 private:
     UInt64 limit;
     UInt64 offset;
+
+    bool with_ties;
+    const SortDescription sort_columns_description;
+
+    UInt64 with_ties_row_chunk_idx = -1;
+    Chunk with_ties_row_chunk;
+    std::vector<size_t> sort_column_positions;
 
     /// Total rows currently queued across all inputs.
     UInt64 queued_row_count = 0;
@@ -70,7 +78,14 @@ private:
     std::queue<ChunkWithPort> queue;
 
 public:
-    NegativeLimitTransform(SharedHeader header_, UInt64 limit_, UInt64 offset_, size_t num_streams = 1);
+    NegativeLimitTransform(
+        SharedHeader header_, 
+        UInt64 limit_, 
+        UInt64 offset_, 
+        size_t num_streams = 1,
+        bool with_ties_ = false,
+        SortDescription description_ = {}
+    );
 
     String getName() const override { return "NegativeLimit"; }
 
@@ -97,6 +112,12 @@ private:
     /// Tries to push the Prefix part of the front chunk of the queue that is within LIMIT
     /// and Suffix part might be inside OFFSET
     Status tryPushChunkPrefixWithinLimit();
+
+    Chunk makeChunkWithRowSortColumns(const Chunk & chunk, UInt64 row) const;
+
+    bool sortColumnsTie(const Chunk & chunk) const;
+
+    ColumnRawPtrs extractSortColumns(const Columns & columns) const;
 };
 
 }

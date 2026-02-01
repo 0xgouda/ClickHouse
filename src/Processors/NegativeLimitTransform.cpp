@@ -1,3 +1,4 @@
+#include <cassert>
 #include <Columns/IColumn.h>
 #include <Processors/NegativeLimitTransform.h>
 #include <Processors/Port.h>
@@ -10,10 +11,19 @@ namespace ErrorCodes
 extern const int LOGICAL_ERROR;
 }
 
-NegativeLimitTransform::NegativeLimitTransform(SharedHeader header_, UInt64 limit_, UInt64 offset_, size_t num_streams)
+NegativeLimitTransform::NegativeLimitTransform(
+    SharedHeader header_, 
+    UInt64 limit_, 
+    UInt64 offset_, 
+    size_t num_streams,
+    bool with_ties_,
+    SortDescription sort_columns_description_
+)
     : IProcessor(InputPorts(num_streams, header_), OutputPorts(num_streams, header_))
     , limit(limit_)
     , offset(offset_)
+    , with_ties(with_ties_)
+    , sort_columns_description(std::move(sort_columns_description_))
 {
     ports_data.resize(num_streams);
 
@@ -30,6 +40,9 @@ NegativeLimitTransform::NegativeLimitTransform(SharedHeader header_, UInt64 limi
         ports_data[cur_stream].output_port = &output;
         ++cur_stream;
     }
+
+    for (const auto & desc : sort_columns_description)
+        sort_column_positions.push_back(header_->getPositionByName(desc.column_name));
 }
 
 /// First, our goal is to pull all the data from input ports. Once we have reached the end,
@@ -179,6 +192,13 @@ NegativeLimitTransform::Status NegativeLimitTransform::advancePort(PortsData & d
 
         queue.push(ChunkWithPort{&output, std::move(chunk)});
 
+        if (queued_row_count >= offset && queued_row_count - offset >= limit &&
+            !(queued_row_count - rows >= offset && (queued_row_count - rows) - offset >= limit))
+        {
+            with_ties_row_chunk_idx = queue.size() - 1;
+            with_ties_row_chunk = makeChunkWithRowSortColumns(queue.back().chunk, (queued_row_count - offset) - limit);
+        }
+
         /// Try removing the whole chunks that will never be part of the LIMIT
         while (!queue.empty())
         {
@@ -192,6 +212,9 @@ NegativeLimitTransform::Status NegativeLimitTransform::advancePort(PortsData & d
             const UInt64 rem = queued_row_count - front_chunk_rows;
             if (rem >= offset && (rem - offset) >= limit)
             {
+                // TODO: add comments + rethink about minimizing the number of executions of sortColumnsTie() 
+                if (with_ties && sortColumnsTie(fchunk))
+                    break;
                 queued_row_count -= front_chunk_rows;
                 queue.pop();
             }
@@ -386,6 +409,45 @@ IProcessor::Status NegativeLimitTransform::tryPushChunkPrefixWithinLimit()
     queued_row_count -= take;
 
     return Status::PortFull;
+}
+
+bool NegativeLimitTransform::sortColumnsTie(const Chunk & chunk) const
+{
+    assert(with_ties_row_chunk_idx >= 0 && with_ties_row_chunk_idx < queue.size());
+
+    auto front_chunk_sort_columns = extractSortColumns(chunk.getColumns());
+    assert(front_chunk_sort_columns.size() == queue[with_ties_chunk_idx].chunk.getNumColumns());
+
+    const auto & ties_chunk_sort_columns = with_ties_row_chunk.getColumns();
+
+    UInt64 last_row_num = chunk.getNumRows() - 1;
+    size_t size = front_chunk_sort_columns.size();
+    for (size_t i = 0; i < size; ++i)
+        if (0 != front_chunk_sort_columns[i]->compareAt(last_row_num, 0, *ties_chunk_sort_columns[i], 1))
+            return false;
+    return true;
+}
+
+ColumnRawPtrs NegativeLimitTransform::extractSortColumns(const Columns & columns) const
+{
+    ColumnRawPtrs res;
+    res.reserve(sort_columns_description.size());
+    for (size_t pos : sort_column_positions)
+        res.push_back(columns[pos].get());
+    return res;
+}
+
+Chunk NegativeLimitTransform::makeChunkWithRowSortColumns(const Chunk & chunk, UInt64 row) const
+{
+    assert(row < chunk.getNumRows());
+    ColumnRawPtrs current_columns = extractSortColumns(chunk.getColumns());
+    MutableColumns row_sort_columns;
+    for (size_t i = 0; i < current_columns.size(); ++i)
+    {
+        row_sort_columns.emplace_back(current_columns[i]->cloneEmpty());
+        row_sort_columns[i]->insertFrom(*current_columns[i], row);
+    }
+    return Chunk(std::move(row_sort_columns), 1);
 }
 
 }
